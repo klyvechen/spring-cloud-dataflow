@@ -16,6 +16,11 @@
 
 package org.springframework.cloud.dataflow.server.service.impl;
 
+import java.io.IOException;
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -30,13 +35,13 @@ import java.util.stream.StreamSupport;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cloud.dataflow.audit.service.AuditRecordService;
 import org.springframework.cloud.dataflow.core.AuditActionType;
 import org.springframework.cloud.dataflow.core.AuditOperationType;
 import org.springframework.cloud.dataflow.core.Launcher;
 import org.springframework.cloud.dataflow.core.TaskDefinition;
 import org.springframework.cloud.dataflow.core.TaskDeployment;
-import org.springframework.cloud.dataflow.core.TaskPlatformFactory;
 import org.springframework.cloud.dataflow.rest.util.ArgumentSanitizer;
 import org.springframework.cloud.dataflow.rest.util.DeploymentPropertiesUtils;
 import org.springframework.cloud.dataflow.server.job.LauncherRepository;
@@ -76,6 +81,9 @@ import org.springframework.util.StringUtils;
 public class DefaultTaskExecutionService implements TaskExecutionService {
 
 	private static final Logger logger = LoggerFactory.getLogger(DefaultTaskExecutionService.class);
+
+	@Value("${spring.cloud.deployer.local.workingDirectoriesRoot:${user.home}/logs}")
+	private String logRoot;
 
 	/**
 	 * Used to launch apps as tasks.
@@ -220,19 +228,17 @@ public class DefaultTaskExecutionService implements TaskExecutionService {
 		Launcher launcher = this.launcherRepository.findByName(platformName);
 		// In case of Cloud Foundry, fetching logs by external execution Id isn't valid as the execution instance is destroyed.
 		// We need to use the task name instead.
-		if (launcher != null && launcher.getType().equals(TaskPlatformFactory.CLOUDFOUNDRY_PLATFORM_TYPE)) {
-			try {
-				TaskDeployment taskDeployment = this.taskDeploymentRepository.findByTaskDeploymentId(taskId);
-				if (taskDeployment == null) {
-					throw new IllegalArgumentException();
-				}
-				taskId = taskDeployment.getTaskDefinitionName();
-			}
-			catch (Exception e) {
-				return "Log could not be retrieved as the task instance is not running by the ID: "+ taskId;
+		TaskDeployment taskDeployment = this.taskDeploymentRepository.findByTaskDeploymentId(taskId);
+		try {
+			if (taskDeployment == null) {
+				throw new IllegalArgumentException();
+			} else {
+				return getLogFromFile(taskDeployment.getTaskDefinitionName() + "/" + taskDeployment.getTaskDeploymentId());
 			}
 		}
-		return findTaskLauncher(platformName).getLog(taskId);
+		catch (Exception e) {
+			return "Log could not be retrieved as the task deployment found: "+ taskId;
+		}
 	}
 
 	@Override
@@ -333,6 +339,26 @@ public class DefaultTaskExecutionService implements TaskExecutionService {
 			}
 		}
 		return taskExecutions;
+	}
+
+	private String getLogFromFile(String folderPath) {
+		if (!logRoot.endsWith("/"))
+			logRoot.concat("/");
+		String path = logRoot + folderPath + "/stdout.log";
+		String content = "";
+		try {
+			content = readFile(path , StandardCharsets.UTF_8);
+		} catch (IOException ioe) {
+			ioe.printStackTrace();
+			content = "IOException: cannot load the file content from " + path;
+		}
+		return content;
+	}
+
+	static String readFile(String path, Charset encoding) throws IOException
+	{
+		byte[] encoded = Files.readAllBytes(Paths.get(path));
+		return new String(encoded, encoding);
 	}
 
 }
